@@ -7,12 +7,15 @@ import (
 	"gorm.io/gorm"
 	"oversold/util"
 	"oversold/util/model"
+	"oversold/util/mutex"
 )
 
-// Oversold 产生超售的订单
-func Oversold(c *gin.Context) {
+func OversoldMutex(c *gin.Context) {
 	// 获取请求参数
 	req := Marshal(c)
+
+	mutex.OversoldMutex.Lock()
+	defer mutex.OversoldMutex.Unlock()
 
 	// 查询库存 -> 扣减库存 -> 产生订单
 	err := util.GetMysqlConn().Transaction(func(tx *gorm.DB) error {
@@ -25,14 +28,19 @@ func Oversold(c *gin.Context) {
 		}
 
 		if product.Num >= req.Num { // 库存足够
-			// 产生订单
-			// insert into order(user_id, product_id) values(?,?)
-			tx.Create(&model.Order{UserID: req.UserId, ProductID: req.SkuId})
-
 			// 扣减库存
 			product.Num -= req.Num
 			// update product set num =? where id = ?
-			err = tx.Model(&product).Where("id = ?", product.ID).Update("num", product.Num).Error
+			err = tx.Model(&model.Product{}).
+				Where("id = ?", product.ID).
+				Update("num", product.Num).Error
+			if err != nil {
+				return err
+			}
+
+			// 创建订单
+			// insert into order(user_id, product_id) values(?,?)
+			err = tx.Create(&model.Order{UserID: req.UserId, ProductID: req.SkuId}).Error
 			if err != nil {
 				return err
 			}
